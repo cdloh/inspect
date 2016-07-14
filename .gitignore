@@ -1,0 +1,4 @@
+getid/getid
+graphitewatcher/graphitewatcher
+nsq_metricpersist_to_stdout/nsq_metricpersist_to_stdout
+nsq_metrics_to_stdout/nsq_metrics_to_stdout
