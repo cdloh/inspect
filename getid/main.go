@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/raintank/schema"
+	"gopkg.in/raintank/schema.v0"
 )
 
 func usage() {

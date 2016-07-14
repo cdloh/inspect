@@ -16,11 +16,11 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/nsqio/go-nsq"
-	"github.com/raintank/raintank-metric/app"
-	"github.com/raintank/raintank-metric/metric_tank/mdata"
-	"github.com/raintank/schema"
-	"github.com/raintank/schema/msg"
+	"github.com/raintank/metrictank/mdata"
+	"github.com/raintank/misc/app"
 	"github.com/raintank/worldping-api/pkg/log"
+	"gopkg.in/raintank/schema.v0"
+	"gopkg.in/raintank/schema.v0/msg"
 )
 
 var (

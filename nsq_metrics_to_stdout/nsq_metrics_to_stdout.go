@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/nsqio/go-nsq"
-	"github.com/raintank/raintank-metric/app"
-	"github.com/raintank/schema"
-	"github.com/raintank/schema/msg"
+	"github.com/raintank/misc/app"
 	"github.com/raintank/worldping-api/pkg/log"
+	"gopkg.in/raintank/schema.v0"
+	"gopkg.in/raintank/schema.v0/msg"
 )
 
 var (
