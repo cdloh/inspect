@@ -106,7 +106,7 @@ func (h *MessageHandler) HandleMessage(m *nsq.Message) error {
 			return err
 		}
 
-		fmt.Println(newMetric.Id, m.Id, m.Interval, newMetric.Metric, m.Name, m.Time, m.Value, m.Tags)
+		log.Debug(newMetric.Id, m.Id, m.Interval, newMetric.Metric, m.Name, m.Time, m.Value, m.Tags)
 
 		// partition by organisation: metrics for the same org should go to the same
 		// partition/MetricTank (optimize for locality~performance)
