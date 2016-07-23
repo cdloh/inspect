@@ -17,6 +17,8 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/nsqio/go-nsq"
 	"github.com/raintank/fakemetrics/out"
+	"github.com/raintank/met"
+	"github.com/raintank/met/helper"
 	"github.com/raintank/misc/app"
 	"github.com/raintank/worldping-api/pkg/log"
 	schemaV0 "gopkg.in/raintank/schema.v0"
@@ -37,37 +39,130 @@ var (
 	logLevel         = flag.Int("log-level", 2, "log level. 0=TRACE|1=DEBUG|2=INFO|3=WARN|4=ERROR|5=CRITICAL|6=FATAL")
 	listenAddr       = flag.String("listen", ":6060", "http listener address.")
 
+	concurrency    = flag.Int("concurrency", 10, "number of goroutines to consume messages from NSQ.")
+	metricChanSize = flag.Int("metric-chan-size", 1000000, "size of buffered chan between consumer and publisher.")
+
 	kafkaCompression = flag.String("kafka-comp", "none", "compression: none|gzip|snappy")
 	kafkaBrokers     = flag.String("kafka-brokers", "", "kafka TCP addresses r e.g. localhost:9092 (may be be given multiple times as a comma-separated list)")
 	kafkaTopic       = flag.String("kafka-topic", "metrics", "NSQ topic")
+	kafkaBatchSize   = flag.Int("kafka-batch-size", 5000, "number of metrics in each batch sent to kafka")
+
+	statsdAddr = flag.String("statsd-addr", "", "statsd address. e.g. localhost:8125")
+	statsdType = flag.String("statsd-type", "standard", "statsd type: standard or datadog")
+
+	flushDuration   met.Timer
+	metricsInCount  met.Count
+	messagesInCount met.Count
+	metricsOutCount met.Count
+	metricChanDepth met.Gauge
 )
 
 type MessageHandler struct {
-	msgIn  msgV0.MetricData
-	Client sarama.SyncProducer
-	Topic  string
+	msgIn msgV0.MetricData
+	ch    chan *schemaV0.MetricData
 }
 
-func NewMessageHandler(topic string, brokers []string, codec string) (*MessageHandler, error) {
+func NewMessageHandler(ch chan *schemaV0.MetricData) *MessageHandler {
+	return &MessageHandler{
+		msgIn: msgV0.MetricData{Metrics: make([]*schemaV0.MetricData, 1)},
+		ch:    ch,
+	}
+}
+
+func PublishMetrics(topic string, brokers []string, codec string, ch chan *schemaV0.MetricData, batchSize int) {
 	config := sarama.NewConfig()
 	config.Producer.RequiredAcks = sarama.WaitForAll // Wait for all in-sync replicas to ack the message
 	config.Producer.Retry.Max = 10                   // Retry up to 10 times to produce the message
 	config.Producer.Compression = out.GetCompression(codec)
 	err := config.Validate()
 	if err != nil {
-		return nil, err
+		log.Fatal(4, err.Error())
 	}
 
 	client, err := sarama.NewSyncProducer(brokers, config)
 	if err != nil {
-		return nil, err
+		log.Fatal(4, err.Error())
 	}
+	buf := make([]*sarama.ProducerMessage, 0, batchSize)
+	dataBuf := make([][]byte, batchSize)
+	keyBuf := make([][]byte, batchSize)
+	for i := range keyBuf {
+		keyBuf[i] = make([]byte, 8)
+	}
+	count := 0
+	ticker := time.NewTicker(time.Second)
+	var m *schemaV0.MetricData
+	newMetric := &schemaV1.MetricData{}
+	lastFlush := time.Now()
+	log.Info("Kafka Publisher starting.")
+	for {
+		select {
+		case <-ticker.C:
+			metricChanDepth.Value(int64(len(ch)))
+			if time.Since(lastFlush) >= time.Second {
+				flush(client, buf)
+				buf = buf[:0]
+				count = 0
+			}
+		case m = <-ch:
+			*newMetric = schemaV1.MetricData{
+				Name:     m.Name,
+				Metric:   m.Metric,
+				Interval: m.Interval,
+				OrgId:    m.OrgId,
+				Value:    m.Value,
+				Time:     m.Time,
+				Unit:     m.Unit,
+				Mtype:    m.TargetType,
+				Tags:     m.Tags,
+			}
+			newMetric.SetId()
+			if *logLevel < 2 {
+				log.Debug(newMetric.Id, m.Id, m.Interval, newMetric.Metric, m.Name, m.Time, m.Value, m.Tags)
+			}
+			data := dataBuf[count]
+			data, err := newMetric.MarshalMsg(data[:0])
+			if err != nil {
+				log.Error(3, err.Error())
+				continue
+			}
 
-	return &MessageHandler{
-		msgIn:  msgV0.MetricData{Metrics: make([]*schemaV0.MetricData, 1)},
-		Client: client,
-		Topic:  topic,
-	}, nil
+			// partition by organisation: metrics for the same org should go to the same
+			// partition/MetricTank (optimize for locality~performance)
+			// the extra 4B (now initialized with zeroes) is to later enable a smooth transition
+			// to a more fine-grained partitioning scheme where
+			// large organisations can go to several partitions instead of just one.
+			binary.LittleEndian.PutUint32(keyBuf[count], uint32(m.OrgId))
+			buf = append(buf, &sarama.ProducerMessage{
+				Key:   sarama.ByteEncoder(keyBuf[count]),
+				Topic: topic,
+				Value: sarama.ByteEncoder(dataBuf[count]),
+			})
+			count++
+			if len(buf) == batchSize {
+				flush(client, buf)
+				buf = buf[:0]
+				count = 0
+			}
+
+		}
+	}
+	log.Info("Kafka Publisher ended.")
+}
+
+func flush(client sarama.SyncProducer, buf []*sarama.ProducerMessage) {
+	preFlush := time.Now()
+	err := client.SendMessages(buf)
+	if err != nil {
+		if errors, ok := err.(sarama.ProducerErrors); ok {
+			for i := 0; i < 10 && i < len(errors); i++ {
+				log.Error(4, "ProducerError %d/%d: %s", i, len(errors), errors[i].Error())
+			}
+		}
+		return
+	}
+	flushDuration.Value(time.Since(preFlush))
+	metricsOutCount.Inc(int64(len(buf)))
 }
 
 func (h *MessageHandler) HandleMessage(m *nsq.Message) error {
@@ -82,53 +177,11 @@ func (h *MessageHandler) HandleMessage(m *nsq.Message) error {
 		log.Error(3, "%s: skipping message", err.Error())
 		return nil
 	}
+	messagesInCount.Inc(1)
+	metricsInCount.Inc(int64(len(h.msgIn.Metrics)))
 
-	var data []byte
-	newMetric := &schemaV1.MetricData{}
-	payload := make([]*sarama.ProducerMessage, len(h.msgIn.Metrics))
-
-	for i, m := range h.msgIn.Metrics {
-
-		*newMetric = schemaV1.MetricData{
-			Name:     m.Name,
-			Metric:   m.Metric,
-			Interval: m.Interval,
-			OrgId:    m.OrgId,
-			Value:    m.Value,
-			Time:     m.Time,
-			Unit:     m.Unit,
-			Mtype:    m.TargetType,
-			Tags:     m.Tags,
-		}
-		newMetric.SetId()
-		data, err := newMetric.MarshalMsg(data)
-		if err != nil {
-			return err
-		}
-
-		log.Debug(newMetric.Id, m.Id, m.Interval, newMetric.Metric, m.Name, m.Time, m.Value, m.Tags)
-
-		// partition by organisation: metrics for the same org should go to the same
-		// partition/MetricTank (optimize for locality~performance)
-		// the extra 4B (now initialized with zeroes) is to later enable a smooth transition
-		// to a more fine-grained partitioning scheme where
-		// large organisations can go to several partitions instead of just one.
-		key := make([]byte, 8)
-		binary.LittleEndian.PutUint32(key, uint32(m.OrgId))
-		payload[i] = &sarama.ProducerMessage{
-			Key:   sarama.ByteEncoder(key),
-			Topic: h.Topic,
-			Value: sarama.ByteEncoder(data),
-		}
-	}
-	err = h.Client.SendMessages(payload)
-	if err != nil {
-		if errors, ok := err.(sarama.ProducerErrors); ok {
-			for i := 0; i < 10 && i < len(errors); i++ {
-				log.Error(4, "ProducerError %d/%d: %s", i, len(errors), errors[i].Error())
-			}
-		}
-		return err
+	for _, m := range h.msgIn.Metrics {
+		h.ch <- m
 	}
 
 	return nil
@@ -143,6 +196,26 @@ func main() {
 		fmt.Println("nsq_metrics_to_stdout")
 		return
 	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatal(4, "failed to lookup hostname. %s", err)
+	}
+
+	var stats met.Backend
+	if *statsdAddr == "" {
+		stats, err = helper.New(false, *statsdAddr, *statsdType, "nsq_metrics_to_kafka", strings.Replace(hostname, ".", "_", -1))
+	} else {
+		stats, err = helper.New(true, *statsdAddr, *statsdType, "nsq_metrics_to_kafka", strings.Replace(hostname, ".", "_", -1))
+	}
+	if err != nil {
+		log.Fatal(4, "failed to initialize statsd. %s", err)
+	}
+	flushDuration = stats.NewTimer("metricpublisher.out.flush_duration", 0)
+	metricsInCount = stats.NewCount("metricpublisher.in.metrics")
+	messagesInCount = stats.NewCount("metricpublisher.in.messages")
+	metricsOutCount = stats.NewCount("metricpublisher.out.metrics")
+	metricChanDepth = stats.NewGauge("metricpublisher.chan.size", 0)
 
 	if *nsqChannel == "" || *nsqChannel == "etl<random-number>#ephemeral" {
 		rand.Seed(time.Now().UnixNano())
@@ -169,7 +242,7 @@ func main() {
 
 	cfg := nsq.NewConfig()
 	cfg.UserAgent = "nsq_metrics_to_kafka"
-	err := app.ParseOpts(cfg, *consumerOpts)
+	err = app.ParseOpts(cfg, *consumerOpts)
 	if err != nil {
 		log.Fatal(4, err.Error())
 	}
@@ -180,12 +253,15 @@ func main() {
 		log.Fatal(4, err.Error())
 	}
 	brokers := strings.Split(*kafkaBrokers, ",")
-	handler, err := NewMessageHandler(*kafkaTopic, brokers, *kafkaCompression)
-	if err != nil {
-		log.Fatal(4, err.Error())
+
+	metricChan := make(chan *schemaV0.MetricData, *metricChanSize)
+
+	for i := 0; i < *concurrency; i++ {
+		handler := NewMessageHandler(metricChan)
+		consumer.AddHandler(handler)
 	}
 
-	consumer.AddHandler(handler)
+	go PublishMetrics(*kafkaTopic, brokers, *kafkaCompression, metricChan, *kafkaBatchSize)
 
 	nsqdAdds := strings.Split(*nsqdTCPAddrs, ",")
 	if len(nsqdAdds) == 1 && nsqdAdds[0] == "" {
