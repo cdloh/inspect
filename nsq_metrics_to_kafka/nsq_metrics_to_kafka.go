@@ -65,14 +65,16 @@ var (
 )
 
 type MessageHandler struct {
-	msgIn msgV0.MetricData
-	ch    chan *schemaV1.MetricData
+	msgIn      msgV0.MetricData
+	ch         chan *schemaV1.MetricData
+	orderCheck map[string]int64
 }
 
 func NewMessageHandler(ch chan *schemaV1.MetricData) *MessageHandler {
 	return &MessageHandler{
-		msgIn: msgV0.MetricData{Metrics: make([]*schemaV0.MetricData, 1)},
-		ch:    ch,
+		msgIn:      msgV0.MetricData{Metrics: make([]*schemaV0.MetricData, 1)},
+		ch:         ch,
+		orderCheck: make(map[string]int64),
 	}
 }
 
@@ -101,7 +103,7 @@ func PublishMetrics(topic string, brokers []string, codec string, ch chan *schem
 	var m *schemaV1.MetricData
 	lastFlush := time.Now()
 	log.Info("Kafka Publisher starting.")
-	orderCheck := make(map[string]int64)
+
 	for {
 		select {
 		case <-ticker.C:
@@ -117,12 +119,6 @@ func PublishMetrics(topic string, brokers []string, codec string, ch chan *schem
 			if *logLevel < 2 {
 				log.Debug(m.Id, m.Interval, m.Metric, m.Name, m.Time, m.Value, m.Tags)
 			}
-			if lastTs, ok := orderCheck[m.Id]; ok {
-				if lastTs >= m.Time {
-					log.Error(3, "%s out of order. lastTs: %d  currentTs: %d", m.Id, lastTs, m.Time)
-				}
-			}
-			orderCheck[m.Id] = m.Time
 
 			data := dataBuf[count][:0]
 			data, err := m.MarshalMsg(data)
@@ -193,6 +189,14 @@ func (h *MessageHandler) HandleMessage(m *nsq.Message) error {
 		if !shouldMigrate(m) {
 			continue
 		}
+		if lastTs, ok := h.orderCheck[m.Id]; ok {
+			if lastTs >= m.Time {
+				log.Error(3, "%s out of order or duplicate. lastTs: %d  currentTs: %d", m.Id, lastTs, m.Time)
+				continue
+			}
+		}
+		h.orderCheck[m.Id] = m.Time
+
 		newMetric := &schemaV1.MetricData{
 			Name:     m.Name,
 			Metric:   m.Metric,
@@ -232,6 +236,9 @@ func loadOrgs() {
 		log.Fatal(4, "couldn't read orgs-file. %s", err)
 	}
 	mu.Lock()
+	for key := range orgList {
+		delete(orgList, key)
+	}
 	for _, line := range strings.Split(string(dat), "\n") {
 		org, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64)
 		if err != nil {
