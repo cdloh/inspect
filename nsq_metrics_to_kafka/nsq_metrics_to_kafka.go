@@ -4,13 +4,15 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
-	"strings"
-
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -50,26 +52,31 @@ var (
 	statsdAddr = flag.String("statsd-addr", "", "statsd address. e.g. localhost:8125")
 	statsdType = flag.String("statsd-type", "standard", "statsd type: standard or datadog")
 
+	orgsFile = flag.String("orgs-list", "./orgs.txt", "path to file with list of orgs to migrate")
+
 	flushDuration   met.Timer
 	metricsInCount  met.Count
 	messagesInCount met.Count
 	metricsOutCount met.Count
 	metricChanDepth met.Gauge
+
+	orgList map[int]struct{}
+	mu      sync.RWMutex
 )
 
 type MessageHandler struct {
 	msgIn msgV0.MetricData
-	ch    chan *schemaV0.MetricData
+	ch    chan *schemaV1.MetricData
 }
 
-func NewMessageHandler(ch chan *schemaV0.MetricData) *MessageHandler {
+func NewMessageHandler(ch chan *schemaV1.MetricData) *MessageHandler {
 	return &MessageHandler{
 		msgIn: msgV0.MetricData{Metrics: make([]*schemaV0.MetricData, 1)},
 		ch:    ch,
 	}
 }
 
-func PublishMetrics(topic string, brokers []string, codec string, ch chan *schemaV0.MetricData, batchSize int) {
+func PublishMetrics(topic string, brokers []string, codec string, ch chan *schemaV1.MetricData, batchSize int) {
 	config := sarama.NewConfig()
 	config.Producer.RequiredAcks = sarama.WaitForAll // Wait for all in-sync replicas to ack the message
 	config.Producer.Retry.Max = 10                   // Retry up to 10 times to produce the message
@@ -91,10 +98,10 @@ func PublishMetrics(topic string, brokers []string, codec string, ch chan *schem
 	}
 	count := 0
 	ticker := time.NewTicker(time.Second)
-	var m *schemaV0.MetricData
-	newMetric := &schemaV1.MetricData{}
+	var m *schemaV1.MetricData
 	lastFlush := time.Now()
 	log.Info("Kafka Publisher starting.")
+	orderCheck := make(map[string]int64)
 	for {
 		select {
 		case <-ticker.C:
@@ -103,25 +110,22 @@ func PublishMetrics(topic string, brokers []string, codec string, ch chan *schem
 				flush(client, buf)
 				buf = buf[:0]
 				count = 0
+				lastFlush = time.Now()
 			}
 		case m = <-ch:
-			*newMetric = schemaV1.MetricData{
-				Name:     m.Name,
-				Metric:   m.Metric,
-				Interval: m.Interval,
-				OrgId:    m.OrgId,
-				Value:    m.Value,
-				Time:     m.Time,
-				Unit:     m.Unit,
-				Mtype:    m.TargetType,
-				Tags:     m.Tags,
-			}
-			newMetric.SetId()
+
 			if *logLevel < 2 {
-				log.Debug(newMetric.Id, m.Id, m.Interval, newMetric.Metric, m.Name, m.Time, m.Value, m.Tags)
+				log.Debug(m.Id, m.Interval, m.Metric, m.Name, m.Time, m.Value, m.Tags)
 			}
-			data := dataBuf[count]
-			data, err := newMetric.MarshalMsg(data[:0])
+			if lastTs, ok := orderCheck[m.Id]; ok {
+				if lastTs >= m.Time {
+					log.Error(3, "%s out of order. lastTs: %d  currentTs: %d", m.Id, lastTs, m.Time)
+				}
+			}
+			orderCheck[m.Id] = m.Time
+
+			data := dataBuf[count][:0]
+			data, err := m.MarshalMsg(data)
 			if err != nil {
 				log.Error(3, err.Error())
 				continue
@@ -132,17 +136,22 @@ func PublishMetrics(topic string, brokers []string, codec string, ch chan *schem
 			// the extra 4B (now initialized with zeroes) is to later enable a smooth transition
 			// to a more fine-grained partitioning scheme where
 			// large organisations can go to several partitions instead of just one.
-			binary.LittleEndian.PutUint32(keyBuf[count], uint32(m.OrgId))
+			key := keyBuf[count]
+			binary.LittleEndian.PutUint32(key, uint32(m.OrgId))
+			if *logLevel < 2 {
+				log.Debug("key is %v", key)
+			}
 			buf = append(buf, &sarama.ProducerMessage{
-				Key:   sarama.ByteEncoder(keyBuf[count]),
+				Key:   sarama.ByteEncoder(key),
 				Topic: topic,
-				Value: sarama.ByteEncoder(dataBuf[count]),
+				Value: sarama.ByteEncoder(data),
 			})
 			count++
 			if len(buf) == batchSize {
 				flush(client, buf)
 				buf = buf[:0]
 				count = 0
+				lastFlush = time.Now()
 			}
 
 		}
@@ -181,10 +190,57 @@ func (h *MessageHandler) HandleMessage(m *nsq.Message) error {
 	metricsInCount.Inc(int64(len(h.msgIn.Metrics)))
 
 	for _, m := range h.msgIn.Metrics {
-		h.ch <- m
+		if !shouldMigrate(m) {
+			continue
+		}
+		newMetric := &schemaV1.MetricData{
+			Name:     m.Name,
+			Metric:   m.Metric,
+			Interval: m.Interval,
+			OrgId:    m.OrgId,
+			Value:    m.Value,
+			Time:     m.Time,
+			Unit:     m.Unit,
+			Mtype:    m.TargetType,
+			Tags:     m.Tags,
+		}
+		newMetric.SetId()
+		h.ch <- newMetric
 	}
 
 	return nil
+}
+
+func shouldMigrate(m *schemaV0.MetricData) bool {
+	if strings.HasPrefix(m.Name, "litmus.") {
+		mu.RLock()
+		_, ok := orgList[m.OrgId]
+		mu.RUnlock()
+		if !ok {
+			return false
+		}
+		m.Name = strings.Replace(m.Name, "litmus.", "worldping.", 1)
+		m.Metric = strings.Replace(m.Metric, "litmus.", "worldping.", 1)
+	}
+
+	return true
+}
+
+func loadOrgs() {
+	dat, err := ioutil.ReadFile(*orgsFile)
+	if err != nil {
+		log.Fatal(4, "couldn't read orgs-file. %s", err)
+	}
+	mu.Lock()
+	for _, line := range strings.Split(string(dat), "\n") {
+		org, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64)
+		if err != nil {
+			log.Error(3, "invalid orgId: %s", line)
+			continue
+		}
+		orgList[int(org)] = struct{}{}
+	}
+	mu.Unlock()
 }
 
 func main() {
@@ -196,6 +252,28 @@ func main() {
 		fmt.Println("nsq_metrics_to_stdout")
 		return
 	}
+
+	// Only try and parse the conf file if it exists
+	if _, err := os.Stat(*orgsFile); err != nil {
+		log.Fatal(4, "orgs-file not found")
+	}
+
+	orgList = make(map[int]struct{})
+
+	loadOrgs()
+	go func() {
+		last := time.Now()
+		ticker := time.NewTicker(time.Minute)
+		for range ticker.C {
+			info, err := os.Stat(*orgsFile)
+			if err != nil {
+				log.Fatal(4, "failed to stat orgs-file. %s", err)
+			}
+			if info.ModTime().After(last) {
+				loadOrgs()
+			}
+		}
+	}()
 
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -254,7 +332,7 @@ func main() {
 	}
 	brokers := strings.Split(*kafkaBrokers, ",")
 
-	metricChan := make(chan *schemaV0.MetricData, *metricChanSize)
+	metricChan := make(chan *schemaV1.MetricData, *metricChanSize)
 
 	for i := 0; i < *concurrency; i++ {
 		handler := NewMessageHandler(metricChan)
