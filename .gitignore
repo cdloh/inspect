@@ -1,4 +1,7 @@
 getid/getid
 graphitewatcher/graphitewatcher
+inspect-es/inspect-es
+nsq_metrics_to_kafka/nsq_metrics_to_kafka
 nsq_metricpersist_to_stdout/nsq_metricpersist_to_stdout
 nsq_metrics_to_stdout/nsq_metrics_to_stdout
+
