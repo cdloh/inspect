@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/raintank/dur"
-	"github.com/raintank/metrictank/metricdef"
+	"github.com/raintank/inspect/metricdef"
 	"gopkg.in/raintank/schema.v1"
 	"log"
 	"math/rand"
