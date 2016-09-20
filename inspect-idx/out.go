@@ -1,6 +1,15 @@
 package main
 
-func showList(ds []*schema.MetricDefinition) {
+import (
+	"fmt"
+	"math/rand"
+	"strings"
+	"time"
+
+	"gopkg.in/raintank/schema.v1"
+)
+
+func showList(ds []schema.MetricDefinition) {
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
@@ -8,7 +17,7 @@ func showList(ds []*schema.MetricDefinition) {
 		}
 	}
 }
-func showVegetaGraphite(ds []*schema.MetricDefinition) {
+func showVegetaGraphite(ds []schema.MetricDefinition) {
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
@@ -17,7 +26,7 @@ func showVegetaGraphite(ds []*schema.MetricDefinition) {
 	}
 }
 
-func showVegetaMT(ds []*schema.MetricDefinition) {
+func showVegetaMT(ds []schema.MetricDefinition) {
 	from := time.Now().Add(-time.Duration(fromS) * time.Second)
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
@@ -27,7 +36,7 @@ func showVegetaMT(ds []*schema.MetricDefinition) {
 	}
 }
 
-func showVegetaMTGraphite(ds []*schema.MetricDefinition) {
+func showVegetaMTGraphite(ds []schema.MetricDefinition) {
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
