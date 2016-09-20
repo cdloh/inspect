@@ -20,6 +20,7 @@ func perror(err error) {
 var maxAge = flag.Int("max-age", 23400, "max age (last update diff with now) of metricdefs. defaults to 6.5hr. use 0 to disable")
 var from = flag.String("from", "30min", "from. eg '30min', '5h', '14d', etc")
 var silent = flag.Bool("silent", false, "silent mode (don't print number of metrics loaded to stderr)")
+var addr = flag.String("addr", "", "graphite/metric tank address override.  defaults to http://graphite:8888 or http://metrictank:6063 based on the output type")
 var fromS uint32
 var total int
 
@@ -42,7 +43,7 @@ func main() {
 		os.Exit(-1)
 	}
 	args := flag.Args()
-	var show func(ds []schema.MetricDefinition)
+	var show func(addr string, ds []schema.MetricDefinition)
 
 	switch args[3] {
 	case "list":
@@ -70,7 +71,7 @@ func main() {
 
 	defs, err := cass.Get()
 	perror(err)
-	show(defs)
+	show(*addr, defs)
 
 	if !*silent {
 		fmt.Fprintf(os.Stderr, "listed %d metrics\n", total)

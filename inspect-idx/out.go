@@ -9,7 +9,7 @@ import (
 	"gopkg.in/raintank/schema.v1"
 )
 
-func showList(ds []schema.MetricDefinition) {
+func showList(addr string, ds []schema.MetricDefinition) {
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
@@ -17,26 +17,35 @@ func showList(ds []schema.MetricDefinition) {
 		}
 	}
 }
-func showVegetaGraphite(ds []schema.MetricDefinition) {
+func showVegetaGraphite(addr string, ds []schema.MetricDefinition) {
+	if addr == "" {
+		addr = "http://graphite:8888"
+	}
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
-			fmt.Printf("GET http://localhost:8888/render?target=%s&from=-%s\nX-Org-Id: %d\n\n", d.Name, *from, d.OrgId)
+			fmt.Printf("GET %s/render?target=%s&from=-%s\nX-Org-Id: %d\n\n", d.Name, *from, d.OrgId)
 		}
 	}
 }
 
-func showVegetaMT(ds []schema.MetricDefinition) {
+func showVegetaMT(addr string, ds []schema.MetricDefinition) {
+	if addr == "" {
+		addr = "http://metrictank:6063"
+	}
 	from := time.Now().Add(-time.Duration(fromS) * time.Second)
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
-			fmt.Printf("GET http://localhost:6063/get?target=%s&from=%d\n", d.Id, from.Unix())
+			fmt.Printf("GET %s/get?target=%s&from=%d\n", addr, d.Id, from.Unix())
 		}
 	}
 }
 
-func showVegetaMTGraphite(ds []schema.MetricDefinition) {
+func showVegetaMTGraphite(addr string, ds []schema.MetricDefinition) {
+	if addr == "" {
+		addr = "http://metrictank:6063"
+	}
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
@@ -59,7 +68,7 @@ func showVegetaMTGraphite(ds []schema.MetricDefinition) {
 			}
 			// mode 3: do nothing :)
 
-			fmt.Printf("GET http://localhost:6063/render?target=%s&from=-%s\nX-Org-Id: %d\n\n", name, *from, d.OrgId)
+			fmt.Printf("GET %s/render?target=%s&from=-%s\nX-Org-Id: %d\n\n", addr, name, *from, d.OrgId)
 		}
 	}
 }
