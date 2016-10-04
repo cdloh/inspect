@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Dieterbe/go-metrics"
-	"github.com/raintank/metrictank/metricdef"
+	"github.com/raintank/inspect/idx/cass"
 	"gopkg.in/raintank/schema.v1"
 	"log"
 	"math/rand"
@@ -36,16 +36,16 @@ var numMetrics = metrics.NewGauge()
 var nullPoints = metrics.NewCounter()
 
 var env string
-var esAddr string
-var esIndex string
+var cassAddr string
+var cassKeyspace string
 var carbonAddr string
 var graphAddr string
 var listenAddr string
 var debug bool
 
 func init() {
-	flag.StringVar(&esAddr, "es-addr", "localhost:9200", "elasticsearch address")
-	flag.StringVar(&esIndex, "es-index", "metric", "elasticsearch index to query")
+	flag.StringVar(&cassAddr, "cass-addr", "cassandra:9042", "cassandra address")
+	flag.StringVar(&cassKeyspace, "cass-keyspace", "raintank", "cassandra keyspace to query")
 	flag.StringVar(&env, "env", "", "environment for metrics")
 	flag.StringVar(&carbonAddr, "carbon", "", "address to send metrics to")
 	flag.StringVar(&graphAddr, "graphite", "", "graphite address")
@@ -53,28 +53,21 @@ func init() {
 	flag.BoolVar(&debug, "debug", false, "debug mode")
 }
 
-func getMetrics(defs *metricdef.DefsEs) []schema.MetricDefinition {
+func getMetrics(idx *cass.Cass) []schema.MetricDefinition {
 	out := make([]schema.MetricDefinition, 0)
-	met, scroll_id, err := defs.GetMetrics("")
+	met, err := idx.Get()
 	perror(err)
 	for _, m := range met {
-		out = append(out, *m)
-	}
-	for scroll_id != "" {
-		met, scroll_id, err = defs.GetMetrics(scroll_id)
-		perror(err)
-		for _, m := range met {
-			out = append(out, *m)
-		}
+		out = append(out, m)
 	}
 	return out
 }
 
-// for a metric to exist in ES at t=Y, there must at least have been 1 point for that metric
+// for a metric to exist in the index at t=Y, there must at least have been 1 point for that metric
 // at a time X where X < Y.  Hence, we can confidently say that if we see a metric at Y, we can
 // demand data to show up for that metric at >=Y
-// for our data check to be useful we need metrics to show up in ES soon after being in the pipeline,
-// which seems to be true (see nsqadmin)
+// for our data check to be useful we need metrics to show up in cassandra soon after being in the pipeline,
+// which is true because MT stores data to cassandra pretty much immediately
 func updateMetrics(metrics []schema.MetricDefinition, seenAt int64) {
 	numMetrics.Update(int64(len(metrics)))
 	for _, met := range metrics {
@@ -100,8 +93,7 @@ func main() {
 		log.Printf("%s\n", http.ListenAndServe(listenAddr, nil))
 	}()
 
-	defs, err := metricdef.NewDefsEs(esAddr, "", "", esIndex, nil)
-	perror(err)
+	idx := cass.New(cassAddr, cassKeyspace)
 
 	metrics.Register("lag", lag)
 	metrics.Register("num_metrics", numMetrics)
@@ -110,11 +102,11 @@ func main() {
 	args := flag.Args()
 	if len(args) == 1 && args[0] == "one" {
 		log.Println("mode: oneshot")
-		metrics := getMetrics(defs)
+		metrics := getMetrics(idx)
 		for len(metrics) == 0 {
-			fmt.Println("waiting to see metrics in ES...")
+			fmt.Println("waiting to see metrics in the index...")
 			time.Sleep(4 * time.Second)
-			metrics = getMetrics(defs)
+			metrics = getMetrics(idx)
 		}
 		updateMetrics(metrics, time.Now().Unix())
 		targetsLock.Lock()
@@ -126,7 +118,7 @@ func main() {
 		go func() {
 			getEsTick := time.NewTicker(time.Second * time.Duration(1))
 			for range getEsTick.C {
-				updateMetrics(getMetrics(defs), time.Now().Unix())
+				updateMetrics(getMetrics(idx), time.Now().Unix())
 			}
 		}()
 

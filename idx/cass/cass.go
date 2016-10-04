@@ -1,4 +1,4 @@
-package main
+package cass
 
 import (
 	"strings"
@@ -8,24 +8,24 @@ import (
 	"gopkg.in/raintank/schema.v1"
 )
 
-type CasIdx struct {
+type Cass struct {
 	keyspace string
 	hosts    []string
 	cluster  *gocql.ClusterConfig
 	session  *gocql.Session
 }
 
-func New(hostStr, keyspace string) *CasIdx {
+func New(hostStr, keyspace string) *Cass {
 	hosts := strings.Split(hostStr, ",")
 
-	return &CasIdx{
+	return &Cass{
 		keyspace: keyspace,
 		hosts:    hosts,
 		cluster:  gocql.NewCluster(hosts...),
 	}
 }
 
-func (c *CasIdx) Get() ([]schema.MetricDefinition, error) {
+func (c *Cass) Get() ([]schema.MetricDefinition, error) {
 	c.cluster.Keyspace = c.keyspace
 	c.cluster.ProtoVersion = 4
 	session, err := c.cluster.CreateSession()

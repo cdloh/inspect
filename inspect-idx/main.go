@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/raintank/dur"
+	"github.com/raintank/inspect/idx/cass"
 	"gopkg.in/raintank/schema.v1"
 	"log"
 	"os"
@@ -67,9 +68,9 @@ func main() {
 		os.Exit(-1)
 	}
 
-	cass := New(args[1], args[2])
+	idx := cass.New(args[1], args[2])
 
-	defs, err := cass.Get()
+	defs, err := idx.Get()
 	perror(err)
 	show(*addr, defs)
 
