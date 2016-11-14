@@ -6,8 +6,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
+
 	"gopkg.in/raintank/schema.v1"
 )
+
+func showDump(addr string, ds []schema.MetricDefinition) {
+	for _, d := range ds {
+		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
+			total += 1
+			spew.Dump(d)
+		}
+	}
+}
 
 func showList(addr string, ds []schema.MetricDefinition) {
 	for _, d := range ds {
@@ -17,6 +28,7 @@ func showList(addr string, ds []schema.MetricDefinition) {
 		}
 	}
 }
+
 func showVegetaGraphite(addr string, ds []schema.MetricDefinition) {
 	if addr == "" {
 		addr = "http://graphite:8888"

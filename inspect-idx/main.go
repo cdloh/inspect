@@ -34,7 +34,7 @@ func main() {
 		fmt.Printf("    host: comma separated list of cassandra addresses in host:port form\n")
 		fmt.Printf("    keyspace: cassandra keyspace\n")
 		fmt.Printf("  idxtype es: not supported at this point\n")
-		fmt.Printf("  output: list|vegeta-graphite|vegeta-mt|vegeta-mt-graphite\n")
+		fmt.Printf("  output: dump|list|vegeta-graphite|vegeta-mt|vegeta-mt-graphite\n")
 		fmt.Println("Flags:")
 		flag.PrintDefaults()
 	}
@@ -47,6 +47,8 @@ func main() {
 	var show func(addr string, ds []schema.MetricDefinition)
 
 	switch args[3] {
+	case "dump":
+		show = showDump
 	case "list":
 		show = showList
 	case "vegeta-graphite":
