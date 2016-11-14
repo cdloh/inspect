@@ -36,7 +36,7 @@ func showVegetaGraphite(addr string, ds []schema.MetricDefinition) {
 	for _, d := range ds {
 		if *maxAge != 0 && d.LastUpdate > time.Now().Unix()-int64(*maxAge) {
 			total += 1
-			fmt.Printf("GET %s/render?target=%s&from=-%s\nX-Org-Id: %d\n\n", d.Name, *from, d.OrgId)
+			fmt.Printf("GET %s/render?target=%s&from=-%s\nX-Org-Id: %d\n\n", addr, d.Name, *from, d.OrgId)
 		}
 	}
 }
