@@ -3,11 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/raintank/dur"
-	"github.com/raintank/inspect/idx/cass"
-	"gopkg.in/raintank/schema.v1"
 	"log"
 	"os"
+	"strconv"
+	"time"
+
+	"github.com/raintank/dur"
+	"github.com/raintank/inspect/idx/cass"
+	"github.com/raintank/inspect/inspect-idx/out"
+	"gopkg.in/raintank/schema.v1"
 )
 
 func perror(err error) {
@@ -16,16 +20,22 @@ func perror(err error) {
 	}
 }
 
-//var esAddr = flag.String("es-addr", "localhost:9200", "elasticsearch address")
-//var esIndex = flag.String("es-index", "metric", "elasticsearch index to query")
-var maxAge = flag.Int("max-age", 23400, "max age (last update diff with now) of metricdefs. defaults to 6.5hr. use 0 to disable")
-var from = flag.String("from", "30min", "from. eg '30min', '5h', '14d', etc")
-var silent = flag.Bool("silent", false, "silent mode (don't print number of metrics loaded to stderr)")
-var addr = flag.String("addr", "", "graphite/metric tank address override.  defaults to http://graphite:8888 or http://metrictank:6063 based on the output type")
-var fromS uint32
-var total int
-
 func main() {
+
+	var (
+		addr   string
+		from   string
+		maxAge string
+		count  bool
+
+		total int
+	)
+
+	flag.StringVar(&addr, "addr", "http://localhost:6060", "graphite/metrictank address")
+	flag.StringVar(&from, "from", "30min", "from. eg '30min', '5h', '14d', etc. or a unix timestamp")
+	flag.StringVar(&maxAge, "max-age", "6h30min", "max age (last update diff with now) of metricdefs.  use 0 to disable")
+	flag.BoolVar(&count, "count", false, "print number of metrics loaded to stderr")
+
 	flag.Usage = func() {
 		fmt.Printf("%s by Dieter_be\n", os.Args[0])
 		fmt.Println("Usage:")
@@ -34,7 +44,7 @@ func main() {
 		fmt.Printf("    host: comma separated list of cassandra addresses in host:port form\n")
 		fmt.Printf("    keyspace: cassandra keyspace\n")
 		fmt.Printf("  idxtype es: not supported at this point\n")
-		fmt.Printf("  output: dump|list|vegeta-graphite|vegeta-mt|vegeta-mt-graphite\n")
+		fmt.Printf("  output: dump|list|vegeta-render|vegeta-render-patterns\n")
 		fmt.Println("Flags:")
 		flag.PrintDefaults()
 	}
@@ -44,25 +54,35 @@ func main() {
 		os.Exit(-1)
 	}
 	args := flag.Args()
-	var show func(addr string, ds []schema.MetricDefinition)
+	var show func(d schema.MetricDefinition)
 
 	switch args[3] {
 	case "dump":
-		show = showDump
+		show = out.Dump
 	case "list":
-		show = showList
-	case "vegeta-graphite":
-		show = showVegetaGraphite
-	case "vegeta-mt":
-		show = showVegetaMT
-	case "vegeta-mt-graphite":
-		show = showVegetaMTGraphite
+		show = out.List
+	case "vegeta-render":
+		show = out.GetVegetaRender(addr, from)
+	case "vegeta-render-patterns":
+		show = out.GetVegetaRenderPattern(addr, from)
 	default:
 		log.Fatal("invalid output")
 	}
-	var err error
-	fromS, err = dur.ParseUNsec(*from)
-	perror(err)
+
+	// from should either a unix timestamp, or a specification that graphite/metrictank will recognize.
+	_, err := strconv.Atoi(from)
+	if err != nil {
+		_, err = dur.ParseUNsec(from)
+		perror(err)
+	}
+
+	maxAgeInt := int64(0)
+	if maxAge != "0" {
+		var i uint32
+		i, err = dur.ParseUNsec(maxAge)
+		perror(err)
+		maxAgeInt = int64(i)
+	}
 
 	if args[0] != "cass" {
 		fmt.Fprintf(os.Stderr, "only cass supported at this point")
@@ -74,9 +94,15 @@ func main() {
 
 	defs, err := idx.Get()
 	perror(err)
-	show(*addr, defs)
 
-	if !*silent {
+	for _, d := range defs {
+		if maxAgeInt != 0 && d.LastUpdate > time.Now().Unix()-maxAgeInt {
+			total += 1
+			show(d)
+		}
+	}
+
+	if count {
 		fmt.Fprintf(os.Stderr, "listed %d metrics\n", total)
 	}
 }
