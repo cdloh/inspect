@@ -1,6 +1,7 @@
 package cass
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/gocql/gocql"
@@ -13,15 +14,17 @@ type Cass struct {
 	hosts    []string
 	cluster  *gocql.ClusterConfig
 	session  *gocql.Session
+	table    string
 }
 
-func New(hostStr, keyspace string) *Cass {
+func New(hostStr, keyspace, table string) *Cass {
 	hosts := strings.Split(hostStr, ",")
 
 	return &Cass{
 		keyspace: keyspace,
 		hosts:    hosts,
 		cluster:  gocql.NewCluster(hosts...),
+		table:    table,
 	}
 }
 
@@ -36,7 +39,7 @@ func (c *Cass) Get() ([]schema.MetricDefinition, error) {
 
 	c.session = session
 	defs := make([]schema.MetricDefinition, 0)
-	iter := c.session.Query("SELECT def from metric_def_idx").Iter()
+	iter := c.session.Query(fmt.Sprintf("SELECT def from %s", c.table)).Iter()
 
 	var data []byte
 	mdef := schema.MetricDefinition{}

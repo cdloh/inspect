@@ -27,6 +27,7 @@ func main() {
 		from   string
 		maxAge string
 		count  bool
+		old    bool
 
 		total int
 	)
@@ -35,6 +36,7 @@ func main() {
 	flag.StringVar(&from, "from", "30min", "from. eg '30min', '5h', '14d', etc. or a unix timestamp")
 	flag.StringVar(&maxAge, "max-age", "6h30min", "max age (last update diff with now) of metricdefs.  use 0 to disable")
 	flag.BoolVar(&count, "count", false, "print number of metrics loaded to stderr")
+	flag.BoolVar(&old, "old", false, "use old cassandra table, metric_def_idx. (prior to clustering)")
 
 	flag.Usage = func() {
 		fmt.Printf("%s by Dieter_be\n", os.Args[0])
@@ -90,7 +92,11 @@ func main() {
 		os.Exit(-1)
 	}
 
-	idx := cass.New(args[1], args[2])
+	table := "metric_idx"
+	if old {
+		table = "metric_def_idx"
+	}
+	idx := cass.New(args[1], args[2], table)
 
 	defs, err := idx.Get()
 	perror(err)
