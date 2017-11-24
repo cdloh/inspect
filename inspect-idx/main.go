@@ -74,14 +74,14 @@ func main() {
 	// from should either a unix timestamp, or a specification that graphite/metrictank will recognize.
 	_, err := strconv.Atoi(from)
 	if err != nil {
-		_, err = dur.ParseUNsec(from)
+		_, err = dur.ParseNDuration(from)
 		perror(err)
 	}
 
 	maxAgeInt := int64(0)
 	if maxAge != "0" {
 		var i uint32
-		i, err = dur.ParseUNsec(maxAge)
+		i, err = dur.ParseNDuration(maxAge)
 		perror(err)
 		maxAgeInt = int64(i)
 	}
