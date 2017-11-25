@@ -93,7 +93,7 @@ func main() {
 		log.Printf("%s\n", http.ListenAndServe(listenAddr, nil))
 	}()
 
-	idx := cass.New(cassAddr, cassKeyspace)
+	idx := cass.New(cassAddr, cassKeyspace, "metrictank.metric")
 
 	metrics.Register("lag", lag)
 	metrics.Register("num_metrics", numMetrics)
