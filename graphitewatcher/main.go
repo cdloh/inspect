@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/Dieterbe/go-metrics"
+	"github.com/rcrowley/go-metrics"
 	"github.com/raintank/inspect/idx/cass"
 	"gopkg.in/raintank/schema.v1"
 	"log"
